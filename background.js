@@ -65,15 +65,26 @@ const ruleIdFor = s => {
   return (h % 900000) + 1;
 };
 
+async function dropRule(origin) {
+  await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [ruleIdFor(origin)] });
+  await chrome.storage.local.remove('rule:' + origin);
+}
+
+// The site's policy now allows data: on its own (or is gone), so a saved copy
+// of its old policy is stale and can block the site's current scripts and
+// styles. Seeing exactly the saved copy means it's the rule's own output.
+async function dropStaleRule(origin, header) {
+  const key = 'rule:' + origin;
+  const stored = (await chrome.storage.local.get(key))[key];
+  if (stored && stored !== header) await dropRule(origin);
+}
+
 async function syncRule(origin, header) {
   const key = 'rule:' + origin;
   const id = ruleIdFor(origin);
   const stored = (await chrome.storage.local.get(key))[key];
   if (!header || /'nonce-/i.test(header)) {
-    if (stored) {
-      await chrome.declarativeNetRequest.updateDynamicRules({ removeRuleIds: [id] });
-      await chrome.storage.local.remove(key);
-    }
+    if (stored) await dropRule(origin);
     return false; // blocked, nothing to do
   }
   const patched = allowData(header);
@@ -97,8 +108,13 @@ chrome.webRequest.onHeadersReceived.addListener(d => {
     .filter(h => h.name.toLowerCase() === 'content-security-policy')
     .map(h => h.value || '').join(', ');
   const tabKey = 'csp:' + d.tabId + ':' + d.frameId;
-  if (!blocksData(header)) { chrome.storage.session.set({ [tabKey]: false }); return; }
-  syncRule(new URL(d.url).origin, header)
+  const origin = new URL(d.url).origin;
+  if (!blocksData(header)) {
+    chrome.storage.session.set({ [tabKey]: false });
+    dropStaleRule(origin, header).catch(() => {});
+    return;
+  }
+  syncRule(origin, header)
     .catch(() => false)
     .then(ok => chrome.storage.session.set({ [tabKey]: !ok }));
 }, { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame'] }, ['responseHeaders']);
