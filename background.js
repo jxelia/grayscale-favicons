@@ -73,18 +73,24 @@ async function dropRule(origin) {
 // The site's policy now allows data: on its own (or is gone), so a saved copy
 // of its old policy is stale and can block the site's current scripts and
 // styles. Seeing exactly the saved copy means it's the rule's own output.
-async function dropStaleRule(origin, header) {
+// The load that revealed this already got the stale copy, so reload the tab.
+async function dropStaleRule(origin, header, tabId) {
   const key = 'rule:' + origin;
   const stored = (await chrome.storage.local.get(key))[key];
-  if (stored && stored !== header) await dropRule(origin);
+  if (!stored || stored === header) return;
+  await dropRule(origin);
+  chrome.tabs.reload(tabId).catch(() => {});
 }
 
-async function syncRule(origin, header) {
+async function syncRule(origin, header, tabId) {
   const key = 'rule:' + origin;
   const id = ruleIdFor(origin);
   const stored = (await chrome.storage.local.get(key))[key];
   if (!header || /'nonce-/i.test(header)) {
-    if (stored) await dropRule(origin);
+    if (stored) {
+      await dropRule(origin); // this load got the stale copy too
+      chrome.tabs.reload(tabId).catch(() => {});
+    }
     return false; // blocked, nothing to do
   }
   const patched = allowData(header);
@@ -111,10 +117,10 @@ chrome.webRequest.onHeadersReceived.addListener(d => {
   const origin = new URL(d.url).origin;
   if (!blocksData(header)) {
     chrome.storage.session.set({ [tabKey]: false });
-    dropStaleRule(origin, header).catch(() => {});
+    dropStaleRule(origin, header, d.tabId).catch(() => {});
     return;
   }
-  syncRule(origin, header)
+  syncRule(origin, header, d.tabId)
     .catch(() => false)
     .then(ok => chrome.storage.session.set({ [tabKey]: !ok }));
 }, { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'sub_frame'] }, ['responseHeaders']);
