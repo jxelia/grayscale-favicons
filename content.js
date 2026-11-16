@@ -2,6 +2,13 @@
   if (window.__grayFavicon || !document.head) return;
   window.__grayFavicon = true;
 
+  // After the extension reloads, the copy injected into this tab runs in a
+  // fresh world and announces itself; the old copy puts the site's icon back
+  // and stops, so the fresh copy starts from the page's own links.
+  const TAKEOVER = 'gray-favicon-takeover';
+  document.dispatchEvent(new CustomEvent(TAKEOVER));
+  try { chrome.runtime.sendMessage('gf:checkBuild').catch(() => {}); } catch (_) {}
+
   const MARK = 'data-gray-favicon';
   let intensity = 100;     // 0..100
   let lift = 50;           // 0..100, raises the black point
@@ -149,6 +156,12 @@
     if (!ours.isConnected) document.head.appendChild(ours);
     watch();
   }
+
+  document.addEventListener(TAKEOVER, () => {
+    restore();
+    mo.disconnect();
+    blocked = true; // ignore anything still queued
+  }, { once: true });
 
   // Backup for a CSP the up-front check missed: put the site's own icon back
   // and stop trying on this page.
