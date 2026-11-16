@@ -1,10 +1,11 @@
 (() => {
-  if (window.__grayFavicon || !document.head) return;
-  window.__grayFavicon = true;
+  if (!document.head) return;
 
-  // After the extension reloads, the copy injected into this tab runs in a
-  // fresh world and announces itself; the old copy puts the site's icon back
-  // and stops, so the fresh copy starts from the page's own links.
+  // Each copy that starts (page load, or injection after the extension
+  // reloads) announces itself; a copy already running here puts the site's
+  // icon back and stops, so the fresh copy starts from the page's own links.
+  // A window flag can't do this: after a reload the fresh copy shares the old
+  // copy's window and would see the flag and quit, leaving the old code.
   const TAKEOVER = 'gray-favicon-takeover';
   document.dispatchEvent(new CustomEvent(TAKEOVER));
   try { chrome.runtime.sendMessage('gf:checkBuild').catch(() => {}); } catch (_) {}
@@ -156,6 +157,18 @@
     if (!ours.isConnected) document.head.appendChild(ours);
     watch();
   }
+
+  // The background sees the tab's icon turn back to the site's color one
+  // (Chrome's own lookup finishing after the swap) and asks for the gray one
+  // again. Chrome ignores an href change on the same link here, but takes a
+  // link that is inserted again.
+  chrome.runtime.onMessage.addListener(msg => {
+    if (msg !== 'gf:reassert' || !ours || !ours.isConnected || blocked || intensity <= 0) return;
+    mo.disconnect();
+    ours.remove();
+    document.head.appendChild(ours);
+    watch();
+  });
 
   document.addEventListener(TAKEOVER, () => {
     restore();

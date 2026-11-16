@@ -157,3 +157,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   chrome.storage.session.get(key).then(v => sendResponse({ blocked: !!v[key] || meta.some(blocksData) }));
   return true;
 });
+
+// Chrome sometimes shows the site's color icon even though the page only
+// declares the gray one (abc.net.au): it puts back the icon it has saved for
+// the address each time the page finishes another burst of loading. Whenever
+// the tab's icon turns into anything that isn't a data: URL, ask the page to
+// put the gray link in again. Capped at 10 in 10 seconds so a tab can't loop.
+const reasserts = new Map();
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  const url = info.favIconUrl;
+  if (!url || url.startsWith('data:')) return;
+  const now = Date.now();
+  const recent = (reasserts.get(tabId) || []).filter(t => now - t < 10000);
+  if (recent.length >= 10) return;
+  recent.push(now);
+  reasserts.set(tabId, recent);
+  chrome.tabs.sendMessage(tabId, 'gf:reassert').catch(() => {});
+});
+chrome.tabs.onRemoved.addListener(tabId => reasserts.delete(tabId));
