@@ -29,9 +29,19 @@
     return links.reduce((a, b) => (score(b) >= score(a) ? b : a));
   }
 
-  const mo = new MutationObserver(() => {
-    if (intensity <= 0 || blocked) return;
-    if (++moCount > 25) { mo.disconnect(); return; } // page keeps fighting us; give up
+  // React only to icon changes: a site link added or given rel=icon, or the
+  // site editing or removing the extension's link. Other head churn (Next.js
+  // adds scripts and preloads while it loads) used to use up the give-up
+  // limit, so when the site later put its icon back nothing removed it.
+  const isIcon = n => n.nodeName === 'LINK' && /(^|\s)icon(\s|$)/i.test(n.getAttribute('rel') || '');
+  const relevant = r =>
+    r.type === 'attributes'
+      ? r.target === ours || isIcon(r.target)
+      : [...r.addedNodes].some(n => isIcon(n) && !n.hasAttribute(MARK)) ||
+        (ours && [...r.removedNodes].includes(ours));
+  const mo = new MutationObserver(recs => {
+    if (intensity <= 0 || blocked || !recs.some(relevant)) return;
+    if (++moCount > 25) { mo.disconnect(); return; } // site keeps fighting over the icon; give up
     clearTimeout(timer);
     timer = setTimeout(apply, 50);
   });
@@ -119,16 +129,6 @@
     ours.__set = dataUrl;
     if (!ours.isConnected) document.head.appendChild(ours);
     watch();
-
-    // Chrome may finish downloading the site's original icon after the swap
-    // and show it (abc.net.au's SVG). Set the icon again a little later with
-    // a changed URL (the fragment is ignored) so Chrome picks it up again.
-    [1000, 3000].forEach((ms, n) => setTimeout(() => {
-      if (id !== renderId || !ours || !ours.isConnected) return;
-      mo.disconnect();
-      ours.href = ours.__set = dataUrl + '#' + (n + 1);
-      watch();
-    }, ms));
   }
 
   // Backup for a CSP the up-front check missed: put the site's own icon back
