@@ -9,10 +9,10 @@
   let stash = [];          // site <link> nodes we removed (restored at 0%)
   let ours = null;         // our replacement <link>
   let blocked = false;     // the page's CSP refuses our icon
-  let moCount = 0;         // re-applies triggered by page mutations
-  let timer = null;
   let renderId = 0;
+  let fights = [];         // times the site put its icon back, last 2 s
   const fetched = new Map(); // href -> data URL
+  const grayed = new Map();  // href|intensity|lift -> gray data URL
 
   const iconLinks = () =>
     [...document.querySelectorAll('link[rel~="icon"]')].filter(l => !l.hasAttribute(MARK));
@@ -31,24 +31,37 @@
 
   // React only to icon changes: a site link added or given rel=icon, or the
   // site editing or removing the extension's link. Other head churn (Next.js
-  // adds scripts and preloads while it loads) used to use up the give-up
-  // limit, so when the site later put its icon back nothing removed it.
+  // adds scripts and preloads while loading) is ignored.
   const isIcon = n => n.nodeName === 'LINK' && /(^|\s)icon(\s|$)/i.test(n.getAttribute('rel') || '');
   const relevant = r =>
     r.type === 'attributes'
       ? r.target === ours || isIcon(r.target)
       : [...r.addedNodes].some(n => isIcon(n) && !n.hasAttribute(MARK)) ||
         (ours && [...r.removedNodes].includes(ours));
+
+  // Give up only on a real tug-of-war: the site putting its icon back more
+  // than 10 times in 2 seconds. Sites that change the icon now and then
+  // (unread badges) stay gray however long the tab is open.
+  const fighting = () => {
+    const now = Date.now();
+    fights = fights.filter(t => now - t < 2000);
+    fights.push(now);
+    return fights.length > 10;
+  };
+
+  // The callback runs before the next paint, and an icon seen before is
+  // swapped from the cache without waiting, so the color icon never shows.
   const mo = new MutationObserver(recs => {
     if (intensity <= 0 || blocked || !recs.some(relevant)) return;
-    if (++moCount > 25) { mo.disconnect(); return; } // site keeps fighting over the icon; give up
-    clearTimeout(timer);
-    timer = setTimeout(apply, 50);
+    if (fighting()) { mo.disconnect(); return; }
+    apply();
   });
   const watch = () =>
     mo.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel'] });
 
   async function toGray(href, t) {
+    const key = href + '|' + intensity + '|' + lift;
+    if (grayed.has(key)) return grayed.get(key);
     let src = href;
     if (!href.startsWith('data:')) {
       if (!fetched.has(href)) {
@@ -84,7 +97,9 @@
       }
       ctx.putImageData(d, 0, 0);
     }
-    return c.toDataURL('image/png');
+    const out = c.toDataURL('image/png');
+    grayed.set(key, out);
+    return out;
   }
 
   function restore() {
@@ -114,10 +129,14 @@
     if (!originalHref) originalHref = new URL('/favicon.ico', location.origin).href;
     watch();
 
-    const dataUrl = await toGray(originalHref, intensity / 100);
+    const key = originalHref + '|' + intensity + '|' + lift;
+    const dataUrl = grayed.has(key) ? grayed.get(key) : await toGray(originalHref, intensity / 100);
     if (id !== renderId) return;
     if (!dataUrl) return restore(); // couldn't process; leave the site's icon alone
+    setOurs(dataUrl);
+  }
 
+  function setOurs(dataUrl) {
     mo.disconnect();
     if (!ours) {
       ours = document.createElement('link');
