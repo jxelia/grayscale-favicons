@@ -119,6 +119,16 @@
     ours.__set = dataUrl;
     if (!ours.isConnected) document.head.appendChild(ours);
     watch();
+
+    // Chrome may finish downloading the site's original icon after the swap
+    // and show it (abc.net.au's SVG). Set the icon again a little later with
+    // a changed URL (the fragment is ignored) so Chrome picks it up again.
+    [1000, 3000].forEach((ms, n) => setTimeout(() => {
+      if (id !== renderId || !ours || !ours.isConnected) return;
+      mo.disconnect();
+      ours.href = ours.__set = dataUrl + '#' + (n + 1);
+      watch();
+    }, ms));
   }
 
   // Backup for a CSP the up-front check missed: put the site's own icon back
