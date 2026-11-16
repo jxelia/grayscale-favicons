@@ -13,7 +13,6 @@
   const MARK = 'data-gray-favicon';
   let intensity = 100;     // 0..100
   let lift = 50;           // 0..100, raises the black point
-  let tinted = false;      // macOS Tinted (Graphite) look instead of grayscale
   let originalHref = null; // the site's real favicon URL
   let stash = [];          // site <link> nodes we removed (restored at 0%)
   let ours = null;         // our replacement <link>
@@ -68,10 +67,8 @@
   const watch = () =>
     mo.observe(document.head, { childList: true, subtree: true, attributes: true, attributeFilter: ['href', 'rel'] });
 
-  const TINT = [200, 200, 204]; // Graphite glyph color in the Dock's Tinted mode
-
   async function toGray(href, t) {
-    const key = href + '|' + intensity + '|' + lift + '|' + tinted;
+    const key = href + '|' + intensity + '|' + lift;
     if (grayed.has(key)) return grayed.get(key);
     let src = href;
     if (!href.startsWith('data:')) {
@@ -94,19 +91,8 @@
     const c = document.createElement('canvas');
     c.width = c.height = size;
     const ctx = c.getContext('2d');
-    if (!tinted) ctx.filter = `grayscale(${t})`;
+    ctx.filter = `grayscale(${t})`;
     ctx.drawImage(img, 0, 0, size, size);
-    if (tinted && t > 0) {
-      // macOS Tinted: each pixel's brightness is painted in the tint color, so
-      // white becomes the full Graphite tint and darker shades fade to black.
-      const d = ctx.getImageData(0, 0, size, size);
-      const px = d.data;
-      for (let i = 0; i < px.length; i += 4) {
-        const y = (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
-        for (let k = 0; k < 3; k++) px[i + k] += (TINT[k] * y - px[i + k]) * t;
-      }
-      ctx.putImageData(d, 0, 0);
-    }
     if (lift > 0 && t > 0) {
       // Only raise shades darker than the target grey; lighter shades are untouched.
       const floor = lift * 1.6 * t;
@@ -151,7 +137,7 @@
     if (!originalHref) originalHref = new URL('/favicon.ico', location.origin).href;
     watch();
 
-    const key = originalHref + '|' + intensity + '|' + lift + '|' + tinted;
+    const key = originalHref + '|' + intensity + '|' + lift;
     const dataUrl = grayed.has(key) ? grayed.get(key) : await toGray(originalHref, intensity / 100);
     if (id !== renderId) return;
     if (!dataUrl) return restore(); // couldn't process; leave the site's icon alone
@@ -206,12 +192,11 @@
     .filter(m => m.httpEquiv.toLowerCase() === 'content-security-policy')
     .map(m => m.content || '');
   Promise.all([
-    chrome.storage.local.get({ intensity: 100, lift: 50, tinted: false }),
+    chrome.storage.local.get({ intensity: 100, lift: 50 }),
     chrome.runtime.sendMessage({ type: 'cspCheck', meta }).catch(() => null)
   ]).then(([v, csp]) => {
     intensity = v.intensity;
     lift = v.lift;
-    tinted = v.tinted;
     if (csp && csp.blocked) blocked = true;
     if (intensity > 0) apply();
   });
@@ -219,7 +204,6 @@
     if (area !== 'local') return;
     if (changes.lift) lift = changes.lift.newValue;
     if (changes.intensity) intensity = changes.intensity.newValue;
-    if (changes.tinted) tinted = changes.tinted.newValue;
-    if (changes.intensity || changes.lift || changes.tinted) apply();
+    if (changes.intensity || changes.lift) apply();
   });
 })();
